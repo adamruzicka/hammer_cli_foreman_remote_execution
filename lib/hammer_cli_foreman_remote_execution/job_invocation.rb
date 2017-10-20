@@ -43,24 +43,7 @@ module HammerCLIForemanRemoteExecution
       end
     end
 
-    class OutputCommand < HammerCLIForeman::Command
-      action :output
-      command_name 'output'
-      desc _('View the output for a host')
-
-      option '--async', :flag, N_('Do not wait for job to complete, shows current output only')
-
-      def print_data(output)
-        line_set = output['output'].sort_by { |lines| lines['timestamp'].to_f }
-        since = nil
-
-        line_set.each do |line|
-          puts line['output']
-          since = line['timestamp']
-        end
-        since
-      end
-
+    module OutputPolling
       def execute
         data = get_output
         if data['delayed']
@@ -68,21 +51,15 @@ module HammerCLIForemanRemoteExecution
           return HammerCLI::EX_OK if option_async?
         end
         since = print_data(data)
-
         output_loop(data, since)
         return HammerCLI::EX_OK
-      end
-
-      build_options do |o|
-        o.expand(:all).except(:job_invocations)
-        o.without(:since)
       end
 
       private
 
       def output_loop(data, since = nil)
         while refresh?(data) && !option_async? do
-          sleep 1
+          sleep option_interval
           data = get_output(since)
           since = print_data(data)
         end
@@ -97,14 +74,45 @@ module HammerCLIForemanRemoteExecution
       end
     end
 
-    class OutputsCommand < OutputCommand
+    class OutputCommand < HammerCLIForeman::Command
+      include OutputPolling
+
+      action :output
+      command_name 'output'
+      desc _('View the output for a host')
+
+      option '--async', :flag, N_('Do not wait for job to complete, shows current output only')
+      option '--interval', 'I', N_('Poll every I seconds'), :default => 1 { |val| val.to_i }
+
+      def print_data(output)
+        line_set = output['output'].sort_by { |lines| lines['timestamp'].to_f }
+        since = nil
+
+        line_set.each do |line|
+          puts line['output']
+          since = line['timestamp']
+        end
+        since
+      end
+
+      build_options do |o|
+        o.expand(:all).except(:job_invocations)
+        o.without(:since)
+      end
+    end
+
+    class OutputsCommand < HammerCLIForeman::Command
+      include OutputPolling
+
       action :outputs
       command_name 'outputs'
 
       option '--async', :flag, N_('Do not wait for job to complete, shows current output only')
+      option '--interval', 'I', N_('Poll every I seconds'), :default => 1 { |val| val.to_i }
 
       def print_data(output)
         outputs = output.fetch('outputs', {})
+        return if outputs.empty?
         id_name_map = if @option_host_names.nil?
                         Hash[outputs.keys.zip(outputs.keys)]
                       else
@@ -132,10 +140,13 @@ module HammerCLIForemanRemoteExecution
       end
 
       def refresh?(data)
-        data.fetch('outputs', {}).any? { |_, value| value['refresh'] }
+        data['delayed'] || data.fetch('outputs', {}).any? { |_, value| value['refresh'] }
       end
 
-      build_options
+      build_options do |o|
+        o.expand(:all).except(:job_invocations)
+        o.without(:since)
+      end
     end
 
     class CreateCommand < HammerCLIForeman::CreateCommand
