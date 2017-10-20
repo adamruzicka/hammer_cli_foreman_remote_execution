@@ -81,16 +81,61 @@ module HammerCLIForemanRemoteExecution
       private
 
       def output_loop(data, since = nil)
-        while data['refresh'] && !option_async? do
+        while refresh?(data) && !option_async? do
           sleep 1
           data = get_output(since)
           since = print_data(data)
         end
       end
 
+      def refresh?(data)
+        data['refresh']
+      end
+
       def get_output(since = nil)
         resource.call(action, request_params.merge(:since => since), request_headers, request_options)
       end
+    end
+
+    class OutputsCommand < OutputCommand
+      action :outputs
+      command_name 'outputs'
+
+      option '--async', :flag, N_('Do not wait for job to complete, shows current output only')
+
+      def print_data(output)
+        outputs = output.fetch('outputs', {})
+        id_name_map = if @option_host_names.nil?
+                        Hash[outputs.keys.zip(outputs.keys)]
+                      else
+                        Hash[request_params['host_ids'].map(&:to_s).zip(@option_host_names)]
+                      end
+
+        line_set = outputs.map do |id, value|
+          value['output'].map { |item| [id, item] }
+        end.flatten(1).sort_by { |(_, value)| value['timestamp'].to_f }
+
+        since = line_set.last.last['timestamp']
+
+        longest = id_name_map.values.map(&:length).max
+        line_set.each do |(id, line)|
+          printf("%#{longest}s : %s\n", id_name_map[id], line['output'].chomp)
+        end
+        since
+      end
+
+      private
+
+      def execute
+        @option_host_names = [@option_host_name] if @option_host_name
+        super
+      end
+
+      def refresh?(data)
+        data.fetch('outputs', {}).any? { |_, value| value['refresh'] }
+      end
+
+      build_options
     end
 
     class CreateCommand < HammerCLIForeman::CreateCommand
